@@ -4,33 +4,123 @@ output:
   flexdashboard::flex_dashboard:
     orientation: columns
     vertical_layout: fill
+  runtime: shiny
 ---
 
 ```{r setup, include=FALSE}
+library(rsconnect)
+library(here)
+library(readr)
+library(dplyr)
 library(flexdashboard)
+library(shiny)
+library(magrittr)
+library(forcats)
+library(stringr)
+library(waffle)
+library(tidyr)
+library(leaflet)
+library(htmltools)
+library(DT)
 ```
 
-Column {data-width=650}
------------------------------------------------------------------------
+```{r}
+cars <- mtcars
+```
 
-### Chart A
+
+About 
+===================================
+
+Column
+-----------------------------------
+###
+
+The data used in this dashboard is from [COVID Act Now API](https://apidocs.covidactnow.org/).
+The purpose is XXX. 
+
+
+The Data
+===================================
+
+Column
+-----------------------------------
+###
+
+Here is my Data
+
+```{r}
+DT::renderDataTable({
+  DT::datatable(cars,
+                caption = htmltools::tags$caption(
+                  style = 'caption-side: top; text-align: Left;',
+                  htmltools::withTags(
+                    div(HTML('Click here to be redirected to a page where this data can be downloaded.')))),
+                options = list(autoWidth = TRUE,
+                               pageLength = 10,
+                               scroller = TRUE,
+                               scrollY = '450px'))
+})
+```
+
+Static 1
+===================================
+
+
+Column
+-----------------------------------
+### Chart 1 
+```{r}
+plot(x=rnorm(n=10), y=runif(n=10))
+```
+
+Static 2 
+===================================
+
+
+Column {.tabset}
+-----------------------------------
+### Tab 1 
+```{r}
+hist(x=rnorm(n=25))
+``` 
+
+### Tab 2
+```{r}
+hist(x=rexp(n=25))
+``` 
+
+Interactive 1 
+===================================
+
+Column {.sidebar}
+-----------------------------------
+```{r}
+selectInput("variable", "Variable:",
+                  c("A" = "a",
+                    "B" = "b",
+                    "C" = "c"))
+```
+
+Column
+----------------------------------
+
+### Something here 
 
 ```{r}
 
 ```
 
-Column {data-width=350}
------------------------------------------------------------------------
+Interactive 2 
+===================================
 
-### Chart B
+Analysis 
+===================================
 
-```{r}
 
-```
 
-### Chart C
 
-```{r}
 
-```
+
+
 

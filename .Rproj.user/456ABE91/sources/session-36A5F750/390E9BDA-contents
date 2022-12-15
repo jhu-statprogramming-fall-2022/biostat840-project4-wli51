@@ -1,0 +1,375 @@
+---
+title: "API_data_analysis"
+output: html_document
+date: "2022-12-08"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Part 2A: Tidy Census
+Data Dictionary: [link](https://www.socialexplorer.com/data/C2000/metadata/?ds=SF1)
+
+In this part I wanted to explore the association between vacant houses and ethnic diversity across states. 
+The hypothesis here is that higher diversity may indicate higher mobility of people and hence a higher proportion of houses being vacant.  
+
+
+```{r cars}
+library(tidycensus)
+library(tidyverse)
+library(here)
+
+
+```
+
+```{r}
+
+``` 
+
+```{r}
+
+census_key <- Sys.getenv("CENSUS_API_KEY")
+
+census_api_key(census_key)
+
+if(!dir.exists(here("data"))) { dir.create(here("data")) }
+
+if(!file.exists(here("data","housing.RData"))) {
+  us_housing <- get_estimates(geography = "state", product = "housing")
+  
+  save(us_housing, file = here("data","housing.RData"), compress='xz')
+}
+
+if(!file.exists(here("data","us_household_size.RData"))) {
+  us_household_size <- get_decennial(
+    geography = "state", 
+    variables = "P017001"
+  )
+  
+  save(us_household_size, file = here("data","us_household_size.RData"), compress='xz')
+}
+
+if(!file.exists(here("data","us_total_pop.RData"))) {
+  us_total_pop <- get_decennial(
+    geography = "state", 
+    variables = "P001001"
+  )
+  
+  save(us_total_pop, file = here("data","us_total_pop.RData"), compress='xz')
+}
+
+if(!file.exists(here("data","us_geo_race.RData"))) {
+  vars = c("P005003", "P005004", "P005006", "P004003")
+  us_geo_race <- get_decennial(geography = "state", variables = vars, year = 2010,
+              summary_var = "P001001", geometry = TRUE)
+  
+  save(us_geo_race, file = here("data","us_geo_race.RData"), compress='xz')
+}
+
+
+```
+
+
+```{r}
+load(here("data","housing.RData"))
+load(here("data","us_household_size.RData"))
+load(here("data","us_total_pop.RData"))
+load(here("data","us_geo_race.RData"))
+```
+
+```{r}
+us_housing_pivot <- us_housing %>% 
+  mutate(variable = replace(variable, variable == "HUEST", "housing")) %>%
+  pivot_wider(names_from = variable, values_from = value)
+us_household_size_pivot <- us_household_size %>%
+  mutate(variable = replace(variable, variable == "P017001", "avg_household_size")) %>%
+  pivot_wider(names_from = variable, values_from = value)
+us_total_pop_pivot <- us_total_pop %>%
+  mutate(variable = replace(variable, variable == "P001001", "total_population")) %>%
+  pivot_wider(names_from = variable, values_from = value)
+us_house_household_join <- us_housing_pivot %>% 
+  inner_join(us_household_size_pivot, by=c("NAME", "GEOID")) %>% 
+  inner_join(us_total_pop_pivot, by=c("NAME", "GEOID"))
+  
+us_house_household_join <- us_house_household_join %>% 
+  mutate(household_n = total_population/avg_household_size) %>% 
+  mutate(est_vacant_housing = housing - household_n) %>%
+  mutate(est_prop_vacant_housing = est_vacant_housing/housing)
+```
+
+
+
+```{r}
+
+# vars = c("P005003", "P005004", "P005006", "P004003")
+us_geo_race_label <- us_geo_race %>% 
+  mutate(variable = replace(variable, variable == "P005003", "white")) %>%
+  mutate(variable = replace(variable, variable == "P005004", "black")) %>%
+  mutate(variable = replace(variable, variable == "P005006", "asian")) %>%
+  mutate(variable = replace(variable, variable == "P004003", "hispanic")) %>%
+  rename(race="variable")
+
+props <- pmap(us_geo_race_label,
+                     .f = function(value, summary_value, ...){
+                       value/summary_value
+                     })
+
+us_geo_race_label <- us_geo_race_label %>% mutate(prop_race = props) %>% 
+  relocate(prop_race, .after=value) %>% rename(pop = "value", total_pop = "summary_value")
+
+us_geo_race_label_pivot <- us_geo_race_label %>%  pivot_wider(names_from = "race", values_from = c("pop", "prop_race"))
+
+index <- pmap_dbl(us_geo_race_label_pivot,
+                     .f = function(prop_race_white, prop_race_black, prop_race_asian, prop_race_hispanic, ...){
+                       -1*(prop_race_white*log(prop_race_white) + 
+                         prop_race_black*log(prop_race_black) + 
+                         prop_race_asian*log(prop_race_asian) +
+                         prop_race_hispanic*log(prop_race_hispanic))
+                     })
+
+us_geo_race_label_pivot <- us_geo_race_label_pivot %>% mutate(shannon_index=index)
+```
+
+```{r}
+
+pop_rank <- us_geo_race %>% select(-variable, -value, -geometry) %>% distinct() %>% top_n(summary_value, n=10)
+
+us_geo_race_label %>% 
+  filter(NAME %in% pop_rank$NAME) %>%
+  ggplot(aes(race, pop, fill=race)) +
+  geom_col() + facet_wrap(facets="NAME", nrow=5,ncol=2) + 
+  labs(title = "Number of people of each race groups",
+       subtitle = "Across 10 states with largest population",
+       caption = "Does not seem to be any anomalies with the race distributions") +
+  ylab("Number of people") + xlab("Race")
+  
+  
+
+```
+
+
+```{r}
+
+us_geo_race_label_pivot %>% filter(!(NAME %in% c("Alaska", "Hawaii")) ) %>% 
+  ggplot(aes(fill = shannon_index)) + 
+  geom_sf(color = NA) +
+  geom_sf_label(aes(label=signif(shannon_index, 3)), size=2, color="Green") +
+  scale_fill_viridis_c(option = "magma") + 
+  labs(title = "Diveristy indicator",
+       subtitle = "Across U.S., Alaska and Hawaii excluded",
+       caption = "Northern States seem to have consistently less diveristy") +
+  ylab("Latitude") + xlab("Longitude")
+
+``` 
+
+```{r}
+us_geo_race_label_pivot %>% inner_join(us_house_household_join, on=c("NAME", "GEOID")) %>%
+  select(NAME, GEOID, est_prop_vacant_housing, geometry) %>% 
+  filter(!(NAME %in% c("Alaska", "Hawaii")) ) %>% 
+  ggplot(aes(fill = est_prop_vacant_housing)) + 
+  geom_sf(color = NA) +
+  geom_sf_label(aes(label=signif(est_prop_vacant_housing, 3)), size=2, color="Green") +
+  scale_fill_viridis_c(option = "magma") + 
+  labs(title = "Proportion of Vacant House",
+       subtitle = "Across U.S., Alaska and Hawaii excluded",
+       caption = "In the East part of the country, level of vacant housing seemed to correlate with diversity \n In the West part the association seemed to be reversed") +
+  ylab("Latitude") + xlab("Longitude")
+```
+
+```{r}
+geo_housing <- us_geo_race_label_pivot %>% inner_join(us_house_household_join, on=c("NAME", "GEOID")) 
+
+lm(formula = geo_housing$est_prop_vacant_housing ~ geo_housing$shannon_index )
+
+
+geo_housing %>% rename("State" = "NAME") %>%
+  ggplot(aes(x=shannon_index, y=est_prop_vacant_housing)) +
+  geom_point(aes(color=`State`)) +
+  geom_smooth(method = "lm") + 
+  labs(title = "Linear Fit of Vacancy and Diversity",
+       subtitle = "Across U.S. states with Data",
+       caption = "The correlation seemed to be quite weak") +
+  ylab("Proportion Vacant Housing") + xlab("Shannon Index")
+```
+
+It appears that visually there are some correlation between diversity and housing vacancy, but no statistical evidence is detected here. 
+
+Functions Used: 
+
+1. mutate
+2. pivot_wider
+3. inner_join
+4. rename
+5. left_join
+6. relocate
+
+purrr
+1. pmap
+2. pmap_dbl
+
+ggplot
+1. geom_point
+2. geom_sf
+3. geom_col
+
+
+
+##Part 2B: COVID ACT NOW API
+
+Wanted to test whether the recorded COVID-testing data reflects COVID incidence over a time series across states. 
+
+```{r}
+library(jsonlite)
+library(httr)
+
+if(!dir.exists(here("data"))) { dir.create(here("data")) }
+
+# saves data only once (not each time you knit a R Markdown)
+if(!file.exists(here("data","covid_data.RData"))) {
+  
+  covid_key <- Sys.getenv("COVID_ACT_NOW_API_KEY")
+
+  ## build the URL
+  base <- 'https://api.covidactnow.org/v2/states.timeseries'
+  info_key <- '.json?apiKey='
+
+  ## put it all together
+  API_URL <- paste0(base, info_key, covid_key)
+  
+  raw_data <- GET(API_URL)
+  covid_data <- fromJSON(rawToChar(raw_data$content), flatten = TRUE)
+  save(covid_data, file = here("data","covid_data.RData"), compress='xz')
+}
+```
+
+```{r}
+load(here("data","covid_data.RData"))
+```
+
+```{r}
+covid_data_actual <- covid_data %>% select(-metricsTimeseries, -cdcTransmissionLevelTimeseries,
+                                           -communityLevelsTimeseries, -riskLevelsTimeseries)
+
+out = map(.x = covid_data_actual$actualsTimeseries,
+      .f = function(.x, ...){
+                       .x %>% 
+          select(`positiveTests`, `negativeTests`, `newCases`, `date`) %>%  
+          relocate(date, .before=positiveTests) %>% 
+          mutate(positiveTests = replace_na(positiveTests, 0),
+                 negativeTests = replace_na(negativeTests, 0),
+                 newCases = replace_na(newCases, 0)) %>%
+          mutate(pos_ratio = positiveTests/(positiveTests + negativeTests))
+                     })
+covid_data_actual <- covid_data_actual %>% 
+  select(-county, -hsa, -hsaName, -lat, -long, -hsaPopulation, -lastUpdatedDate) %>% 
+  mutate(actualsTimeseries=out)
+```
+
+```{r}
+
+
+lm_summary <- covid_data_actual$actualsTimeseries %>%
+  map(~ lm(newCases ~ pos_ratio, data = .x)) %>%
+  map(summary) 
+
+lm_summary_r_square <- map_dbl(.x = lm_summary, .f=function(.x, ...){
+      unlist(.x)$r.squared
+  })
+
+lm_summary_coef <- covid_data_actual$actualsTimeseries %>%
+  map(~ lm(newCases ~ pos_ratio, data = .x)$coefficients)
+
+lm_summary_coefficient <- map_dbl(.x = lm_summary_coef, .f=function(.x, ...){
+      unlist(.x)[2]
+  })
+
+lm_summary_intercept <- map_dbl(.x = lm_summary_coef, .f=function(.x, ...){
+      unlist(.x)[1]
+  })
+
+covid_data_actual_out <- covid_data_actual %>% 
+  select(country, state, population,cdcTransmissionLevel, starts_with("actuals.")) %>%
+  select(-starts_with("actuals.hsa"), -starts_with("actuals.vaccinations"), -starts_with("actuals.vaccinesAdministered")) %>%
+  mutate(fit_r_square = lm_summary_r_square,
+                             fit_coef = lm_summary_coefficient,
+                             fit_intercept = lm_summary_intercept)
+
+```
+
+```{r, fig.width=8,fig.height=15}
+
+plot_data <- covid_data_actual_out %>% 
+  select(state, population, actuals.cases, actuals.deaths, actuals.vaccinesDistributed) %>%
+  pivot_longer(cols = c(population, actuals.cases, actuals.deaths, actuals.vaccinesDistributed), names_to = "stats", values_to = "values")
+
+plot_data %>% ggplot(aes(fill=stats, x=values, y=state)) + 
+    geom_bar(position="dodge", stat="identity", orientation ="y") + 
+  labs(title = "Counts on Cases, Deaths, Vaccination distribution and Total Population",
+       subtitle = "Across U.S. states with Data",
+       caption = "Generally Vaccination distribution farly exceeds the Population by 2 to 3 times") +
+  ylab("State (2 Letter Abbreviation)") + xlab("Count")
+
+```
+
+```{r}
+
+covid_data_actual_out %>% 
+  ggplot(aes(x=(actuals.positiveTests + actuals.negativeTests)/population, 
+             y= log(fit_r_square), color=state)) +
+  geom_point() + 
+  labs(title = "# Tests Conducted vs. correlation btw. Positive Ratio and Same day incidence",
+       subtitle = "Does the ability for COVID Testing to predict incidence improve with Larger Test Numbers?",
+       caption = "Seems like some weak positive correlation, so having more tests may help") +
+  ylab("Natural Log of State-wise Linear Model Fit R Square values for Linear Model Fit of Positive Ratio and Same day incidence") + xlab("Total Test Conducted/Total State Population") 
+
+```
+
+
+```{r}
+covid_data_append <- covid_data_actual %>% select(state, actualsTimeseries)
+
+timeseries_list = covid_data_append$actualsTimeseries
+state_list = covid_data_append$state
+
+map2_out <- map2(.x = state_list,
+                 .y = timeseries_list,
+                     .f = function(.x, .y){
+                       mutate(.y, state=.x)
+                     })
+covid_timeseries_long <- bind_rows(map2_out)
+
+
+```
+
+```{r, fig.width=10,fig.height=20}
+covid_timeseries_long %>% 
+  mutate(pos_ratio = replace_na(positiveTests, 0)) %>%
+  ggplot(aes(x=pos_ratio, y=newCases, color=`state`)) +
+  geom_point() +
+  geom_smooth(color="black", method = "lm") + facet_wrap(facets="state", nrow=11,ncol=5, scale="free") + 
+  labs(title = "Positive Ratio and Same day incidence",
+       subtitle = "Across States",
+       caption = "The correaltion is very bad for all states, Incidence is often underestimated by positive ratio") +
+  ylab("New Cases (Incidence)") + xlab("Proportion Tested Positive") 
+```
+
+It seems like if you test more people you are able to get better prediction of how bad the incidence is but with a very small marginal gain. 
+
+
+Functions:
+1. select
+2. mutate
+3. relocate
+4. replace_na
+5. bind_rows
+6. starts_with
+
+Purrr:
+1. pmap
+2. map
+
+ggplot:
+1. geom_smooth
+2. geom_point
+3. geom_bar
