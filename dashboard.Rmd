@@ -9,23 +9,105 @@ output:
 
 ```{r setup, include=FALSE}
 library(rsconnect)
+library(tidyverse)
 library(here)
 library(readr)
-library(dplyr)
 library(flexdashboard)
 library(shiny)
 library(magrittr)
 library(forcats)
-library(stringr)
 library(waffle)
-library(tidyr)
 library(leaflet)
 library(htmltools)
 library(DT)
+library(here)
+library(lubridate)
+```
+
+```{r, eval=FALSE}
+cars <- mtcars
+```
+
+```{r, eval=FALSE}
+library(jsonlite)
+library(httr)
+
+
+if(!dir.exists(here("data"))) { dir.create(here("data")) }
+
+# saves data only once (not each time you knit a R Markdown)
+if(!file.exists(here("data","covid_data.RData"))) {
+  
+  covid_key <- Sys.getenv("COVID_ACT_NOW_API_KEY")
+
+  ## build the URL
+  base <- 'https://api.covidactnow.org/v2/states.timeseries'
+  info_key <- '.json?apiKey='
+
+  ## put it all together
+  API_URL <- paste0(base, info_key, covid_key)
+  
+  raw_data <- GET(API_URL)
+  covid_data <- fromJSON(rawToChar(raw_data$content), flatten = TRUE)
+  save(covid_data, file = here("data","covid_data.RData"), compress='xz')
+}
 ```
 
 ```{r}
-cars <- mtcars
+load(here("data","covid_data.RData"))
+```
+
+```{r}
+covid_data_actual <- covid_data %>% select(-metricsTimeseries, -cdcTransmissionLevelTimeseries,
+                                           -communityLevelsTimeseries, -riskLevelsTimeseries)
+
+out = map(.x = covid_data_actual$actualsTimeseries,
+      .f = function(.x, ...){
+                       .x %>% 
+          select(`positiveTests`, `negativeTests`, `newCases`, `date`) %>%  
+          relocate(date, .before=positiveTests) %>% 
+          mutate(positiveTests = replace_na(positiveTests, 0),
+                 negativeTests = replace_na(negativeTests, 0),
+                 newCases = replace_na(newCases, 0)) %>%
+          mutate(pos_ratio = positiveTests/(positiveTests + negativeTests))
+                     })
+covid_data_actual <- covid_data_actual %>% 
+  select(-county, -hsa, -hsaName, -lat, -long, -hsaPopulation, -lastUpdatedDate) %>% 
+  mutate(actualsTimeseries=out)
+
+```
+
+```{r}
+
+lm_summary <- covid_data_actual$actualsTimeseries %>%
+  map(~ lm(newCases ~ pos_ratio, data = .x)) %>%
+  map(summary) 
+
+lm_summary_r_square <- map_dbl(.x = lm_summary, .f=function(.x, ...){
+      unlist(.x)$r.squared
+  })
+
+lm_summary_coef <- covid_data_actual$actualsTimeseries %>%
+  map(~ lm(newCases ~ pos_ratio, data = .x)$coefficients)
+
+lm_summary_coefficient <- map_dbl(.x = lm_summary_coef, .f=function(.x, ...){
+      unlist(.x)[2]
+  })
+
+lm_summary_intercept <- map_dbl(.x = lm_summary_coef, .f=function(.x, ...){
+      unlist(.x)[1]
+  })
+
+covid_data_actual_out <- covid_data_actual %>% 
+  select(country, state, population,cdcTransmissionLevel, starts_with("actuals.")) %>%
+  select(-starts_with("actuals.hsa"), -starts_with("actuals.vaccinations"), -starts_with("actuals.vaccinesAdministered")) %>%
+  mutate(fit_r_square = lm_summary_r_square,
+                             fit_coef = lm_summary_coefficient,
+                             fit_intercept = lm_summary_intercept)
+
+plot_data <- covid_data_actual_out %>% 
+  select(state, population, actuals.cases, actuals.deaths, actuals.vaccinesDistributed) %>%
+  pivot_longer(cols = c(population, actuals.cases, actuals.deaths, actuals.vaccinesDistributed), names_to = "stats", values_to = "values")
 ```
 
 
@@ -35,9 +117,19 @@ About
 Column
 -----------------------------------
 ###
+**What is the purpose of this dashboard?**
 
-The data used in this dashboard is from [COVID Act Now API](https://apidocs.covidactnow.org/).
-The purpose is XXX. 
+
+This dashboard has two purposes:
+
+1. Academic-wise, to allow me to practice with creation of interactive dashboards and presenting my data. 
+2. Data-wise, to present the timeseries data on state-wise COVID infection numbers in relation to vaccine distribution and population size.  
+
+**Data Source**
+
+The data used in this dashboard is retrieved from [COVID Act Now API](https://apidocs.covidactnow.org/), 
+using the [jsonlite](https://cran.r-project.org/web/packages/jsonlite/index.html) and [httr](https://cran.r-project.org/web/packages/httr/index.html) package. 
+
 
 
 The Data
@@ -47,15 +139,19 @@ Column
 -----------------------------------
 ###
 
-Here is my Data
+Presented here is a trimmed down version of the "states.timeseries" data retrieved from 
+the COVID Act Now API. 
+
+The original dataframe directly converted from JSON object 
+returned by the API call has nested dataframes and lists within cells, making it difficult to visualize,
+columns that contain nested dataframes and lists are removed in the trimmed version for presentation.
+
+Each row reports the COVID stats for one state, such as total cases, deaths, vaccine distribution, positive test counts and more.
+Most states come with a CDC level time series data (not presented in this interactive table) that contains daily case counts, positive test etc.  
 
 ```{r}
 DT::renderDataTable({
-  DT::datatable(cars,
-                caption = htmltools::tags$caption(
-                  style = 'caption-side: top; text-align: Left;',
-                  htmltools::withTags(
-                    div(HTML('Click here to be redirected to a page where this data can be downloaded.')))),
+  DT::datatable(covid_data_actual %>% select(-actualsTimeseries),
                 options = list(autoWidth = TRUE,
                                pageLength = 10,
                                scroller = TRUE,
@@ -71,7 +167,14 @@ Column
 -----------------------------------
 ### Chart 1 
 ```{r}
-plot(x=rnorm(n=10), y=runif(n=10))
+
+
+plot_data %>% ggplot(aes(fill=stats, x=values, y=state)) + 
+    geom_bar(position="dodge", stat="identity", orientation ="y") + 
+  labs(title = "Counts on Cases, Deaths, Vaccination distribution and Total Population",
+       subtitle = "Across U.S. states with Data",
+       caption = "Generally Vaccination distribution farly exceeds the Population by 2 to 3 times") +
+  ylab("State (2 Letter Abbreviation)") + xlab("Count")
 ```
 
 Static 2 
@@ -82,12 +185,34 @@ Column {.tabset}
 -----------------------------------
 ### Tab 1 
 ```{r}
-hist(x=rnorm(n=25))
+covid_data_actual_out %>% 
+  ggplot(aes(x=actuals.vaccinesDistributed/population, 
+             y=actuals.cases/population,
+             label=state,
+             color=state)) +
+  geom_point() + 
+  geom_smooth(color="black", method = "lm") +
+  geom_text(hjust=0, vjust=0, size=3) + theme(legend.position="none") +
+  labs(title = "# Vaccine distrubtion/Population vs. Cases/Population",
+       subtitle = "Negative Association",
+       caption = "Seems like some weak negative correlation, so having vaccines help") +
+  ylab("Cases/Population") + xlab("# Vaccine distrubtion/Population") 
 ``` 
 
 ### Tab 2
 ```{r}
-hist(x=rexp(n=25))
+covid_data_actual_out %>% 
+  ggplot(aes(x=actuals.hospitalBeds.capacity/population, 
+             y=actuals.deaths/population,
+             label=state,
+             color=state)) +
+  geom_point() + 
+  geom_smooth(color="black", method = "lm") +
+  geom_text(hjust=0, vjust=0, size=3) + theme(legend.position="none") +
+  labs(title = "Hospital Bed Capacity/Population vs. Deaths/Population",
+       subtitle = "Negative Association",
+       caption = "Seems like some weak negative correlation, interestingly more hospital beds correaltes with more deaths") +
+  ylab("Deaths/Population") + xlab("Hospital Bed Capacity/Population") 
 ``` 
 
 Interactive 1 
@@ -96,10 +221,7 @@ Interactive 1
 Column {.sidebar}
 -----------------------------------
 ```{r}
-selectInput("variable", "Variable:",
-                  c("A" = "a",
-                    "B" = "b",
-                    "C" = "c"))
+selectInput("var", "State:", covid_data_actual_out$state)
 ```
 
 Column
@@ -109,10 +231,55 @@ Column
 
 ```{r}
 
+renderPlot({
+  state = input$variable
+  sub_df = (covid_data_actual %>% filter(state==state))[[9]][[1]]
+  
+  sub_df %>% filter(newCases != 0) %>% mutate(date = as_date(date)) %>% 
+    ggplot(aes(x=date, y=newCases)) + geom_point()
+  })
 ```
 
 Interactive 2 
 ===================================
+
+Column
+----------------------------------
+### Something here 
+
+```{r}
+sgeo = data.frame(state= state.abb, lat = state.center$y, lng = state.center$x)
+sgeo = sgeo %>% inner_join(covid_data_actual_out, by="state")
+```
+
+```{r}
+library(leaflet)
+library(leaflet.minicharts)
+tilesURL <- "http://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+basemap <- leaflet(width = "100%", height = "400px") %>% 
+  addTiles(tilesURL)
+
+
+```
+
+```{r}
+
+df <- sgeo %>% 
+  mutate(idle_beds = actuals.hospitalBeds.capacity - actuals.hospitalBeds.currentUsageTotal,
+         covid_patient = actuals.hospitalBeds.currentUsageCovid,
+         other_patient = actuals.hospitalBeds.currentUsageTotal - actuals.hospitalBeds.currentUsageCovid)
+
+colors <- c("#fcba50", "#cccccc", "#4fc13c")
+
+basemap %>%
+  addMinicharts(
+    sgeo$lng, sgeo$lat,
+    type = "pie",
+    chartdata = df[, c("covid_patient", "other_patient", "idle_beds")], 
+    colorPalette = colors, 
+    width = 60 * sqrt(df$actuals.hospitalBeds.capacity) / sqrt(max(df$actuals.hospitalBeds.capacity)), transitionTime = 0
+  )
+```
 
 Analysis 
 ===================================
