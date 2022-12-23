@@ -61,9 +61,7 @@ load(here("data","covid_data.RData"))
 covid_data_actual <- covid_data %>% select(-metricsTimeseries, -cdcTransmissionLevelTimeseries,
                                            -communityLevelsTimeseries, -riskLevelsTimeseries)
 
-dt <- covid_data_actual %>% select(-actualsTimeseries)
-
-n = length(dt)
+n = length(covid_data_actual) 
 
 out = map(.x = covid_data_actual$actualsTimeseries,
       .f = function(.x, ...){
@@ -122,6 +120,15 @@ Column
 -----------------------------------
 ###
 **What is the purpose of this dashboard?**
+
+<iframe
+    width="640"
+    height="480"
+    src="https://youtu.be/1NxLzwrgDkk"
+    frameborder="0"
+    allow="autoplay; encrypted-media"
+    allowfullscreen>
+</iframe>
 
 
 This dashboard has two purposes:
@@ -298,6 +305,59 @@ Column
 ----------------------------------
 ### Wanted to test whether the recorded COVID-testing data reflects COVID incidence over a time series across states. 
 
+```{r, echo=TRUE, eval=FALSE}
+covid_data_actual <- covid_data %>% select(-metricsTimeseries, -cdcTransmissionLevelTimeseries,
+                                           -communityLevelsTimeseries, -riskLevelsTimeseries)
+
+dt <- covid_data_actual %>% select(-actualsTimeseries)
+
+n = length(dt)
+
+out = map(.x = covid_data_actual$actualsTimeseries,
+      .f = function(.x, ...){
+                       .x %>% 
+          select(`positiveTests`, `negativeTests`, `newCases`, `date`) %>%  
+          relocate(date, .before=positiveTests) %>% 
+          mutate(positiveTests = replace_na(positiveTests, 0),
+                 negativeTests = replace_na(negativeTests, 0),
+                 newCases = replace_na(newCases, 0)) %>%
+          mutate(pos_ratio = positiveTests/(positiveTests + negativeTests))
+                     })
+covid_data_actual <- covid_data_actual %>% 
+  select(-county, -hsa, -hsaName, -lat, -long, -hsaPopulation, -lastUpdatedDate) %>% 
+  mutate(actualsTimeseries=out)
+
+```
+
+```{r, echo=TRUE, eval=FALSE}
+
+lm_summary <- covid_data_actual$actualsTimeseries %>%
+  map(~ lm(newCases ~ pos_ratio, data = .x)) %>%
+  map(summary) 
+
+lm_summary_r_square <- map_dbl(.x = lm_summary, .f=function(.x, ...){
+      unlist(.x)$r.squared
+  })
+
+lm_summary_coef <- covid_data_actual$actualsTimeseries %>%
+  map(~ lm(newCases ~ pos_ratio, data = .x)$coefficients)
+
+lm_summary_coefficient <- map_dbl(.x = lm_summary_coef, .f=function(.x, ...){
+      unlist(.x)[2]
+  })
+
+lm_summary_intercept <- map_dbl(.x = lm_summary_coef, .f=function(.x, ...){
+      unlist(.x)[1]
+  })
+
+covid_data_actual_out <- covid_data_actual %>% 
+  select(country, state, population,cdcTransmissionLevel, starts_with("actuals.")) %>%
+  select(-starts_with("actuals.hsa"), -starts_with("actuals.vaccinations"), -starts_with("actuals.vaccinesAdministered")) %>%
+  mutate(fit_r_square = lm_summary_r_square,
+                             fit_coef = lm_summary_coefficient,
+                             fit_intercept = lm_summary_intercept)
+```
+
 ```{r, echo=TRUE}
 covid_data_append <- covid_data_actual %>% select(state, actualsTimeseries)
 
@@ -318,6 +378,19 @@ covid_timeseries_long <- covid_timeseries_long %>%
 
 Column
 ----------------------------------
+
+```{r}
+
+covid_data_actual_out %>% 
+  ggplot(aes(x=(actuals.positiveTests + actuals.negativeTests)/population, 
+             y= log(fit_r_square), color=state)) +
+  geom_point() + 
+  labs(title = "# Tests Conducted vs. correlation btw. Positive Ratio and Same day incidence",
+       subtitle = "Does the ability for COVID Testing to predict incidence improve with Larger Test Numbers?",
+       caption = "Seems like some weak positive correlation, so having more tests may help") +
+  ylab("Natural Log of State-wise Linear Model Fit R Square values for Linear Model Fit of Positive Ratio and Same day incidence") + xlab("Total Test Conducted/Total State Population") 
+
+```
 
 ```{r, fig.width=10,fig.height=20}
 
