@@ -121,14 +121,7 @@ Column
 ###
 **What is the purpose of this dashboard?**
 
-<iframe
-    width="640"
-    height="480"
-    src="https://youtu.be/1NxLzwrgDkk"
-    frameborder="0"
-    allow="autoplay; encrypted-media"
-    allowfullscreen>
-</iframe>
+<iframe width="1280" height="700" src="https://www.youtube.com/embed/1NxLzwrgDkk" title="flexDashboard Demo" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
 
 
 This dashboard has two purposes:
