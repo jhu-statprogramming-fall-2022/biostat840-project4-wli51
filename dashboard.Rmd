@@ -61,6 +61,10 @@ load(here("data","covid_data.RData"))
 covid_data_actual <- covid_data %>% select(-metricsTimeseries, -cdcTransmissionLevelTimeseries,
                                            -communityLevelsTimeseries, -riskLevelsTimeseries)
 
+dt <- covid_data_actual %>% select(-actualsTimeseries)
+
+n = length(dt)
+
 out = map(.x = covid_data_actual$actualsTimeseries,
       .f = function(.x, ...){
                        .x %>% 
@@ -150,6 +154,8 @@ Each row reports the COVID stats for one state, such as total cases, deaths, vac
 Most states come with a CDC level time series data (not presented in this interactive table) that contains daily case counts, positive test etc.  
 
 ```{r}
+
+
 DT::renderDataTable({
   DT::datatable(covid_data_actual %>% select(-actualsTimeseries),
                 options = list(autoWidth = TRUE,
@@ -221,7 +227,8 @@ Interactive 1
 Column {.sidebar}
 -----------------------------------
 ```{r}
-selectInput("var", "State:", covid_data_actual_out$state)
+selectInput("var", "State:", 
+            covid_data_actual_out$state)
 ```
 
 Column
@@ -232,11 +239,14 @@ Column
 ```{r}
 
 renderPlot({
-  state = input$variable
-  sub_df = (covid_data_actual %>% filter(state==state))[[9]][[1]]
+  st = input$var
+  sub_df = (covid_data_actual %>% filter(state==st))[[9]][[1]]
   
   sub_df %>% filter(newCases != 0) %>% mutate(date = as_date(date)) %>% 
-    ggplot(aes(x=date, y=newCases)) + geom_point()
+    ggplot(aes(x=date, y=newCases)) + geom_point() +
+    ylab("Number of Infections") +
+    xlab("Date") +
+    labs(title = paste0("Timeseries data for infection in ", st))
   })
 ```
 
@@ -283,6 +293,44 @@ basemap %>%
 
 Analysis 
 ===================================
+
+Column
+----------------------------------
+### Wanted to test whether the recorded COVID-testing data reflects COVID incidence over a time series across states. 
+
+```{r, echo=TRUE}
+covid_data_append <- covid_data_actual %>% select(state, actualsTimeseries)
+
+timeseries_list = covid_data_append$actualsTimeseries
+state_list = covid_data_append$state
+
+map2_out <- map2(.x = state_list,
+                 .y = timeseries_list,
+                     .f = function(.x, .y){
+                       mutate(.y, state=.x)
+                     })
+covid_timeseries_long <- bind_rows(map2_out)
+
+covid_timeseries_long <- covid_timeseries_long %>% 
+  mutate(pos_ratio = replace_na(positiveTests, 0))
+
+```
+
+Column
+----------------------------------
+
+```{r, fig.width=10,fig.height=20}
+
+  covid_timeseries_long %>% ggplot(aes(x=pos_ratio, y=newCases, color=`state`)) +
+  geom_point() +
+  geom_smooth(color="black", method = "lm") + facet_wrap(facets="state", nrow=11,ncol=5, scale="free") + 
+  labs(title = "Positive Ratio and Same day incidence",
+       subtitle = "Across States",
+       caption = "The correaltion is very bad for all states, Incidence is often underestimated by positive ratio") +
+  ylab("New Cases (Incidence)") + xlab("Proportion Tested Positive") 
+```
+
+It seems like if you test more people you are able to get better prediction of how bad the incidence is but with a very small marginal gain. 
 
 
 
